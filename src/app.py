@@ -24,7 +24,6 @@ class RemindersApp:
     def __init__(self):
         DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-        # ── single-instance guard ──────────────────────────────────────────────
         if not self._acquire_lock():
             Notify.init(APP_NAME)
             Notify.Notification.new(APP_NAME, "Already running.", "dialog-information").show()
@@ -53,11 +52,8 @@ class RemindersApp:
         self._rebuild_menu()
         self.indicator.set_menu(self._menu)
 
-        # check immediately on start (catches missed reminders), then every N seconds
         GLib.idle_add(self._check_reminders)
         GLib.timeout_add_seconds(CHECK_INTERVAL_SECONDS, self._check_reminders)
-
-    # ── single-instance ────────────────────────────────────────────────────────
 
     def _acquire_lock(self):
         try:
@@ -68,8 +64,6 @@ class RemindersApp:
             return True
         except OSError:
             return False
-
-    # ── menu ──────────────────────────────────────────────────────────────────
 
     def _rebuild_menu(self):
         for child in self._menu.get_children():
@@ -96,8 +90,6 @@ class RemindersApp:
         self._menu.append(Gtk.SeparatorMenuItem())
 
         add_item = Gtk.MenuItem(label="Add Reminder…")
-        # timeout_add(150): give X11 time to release the menu's keyboard grab
-        # before the dialog opens, so the Entry widget receives key events.
         add_item.connect("activate", lambda _: GLib.timeout_add(150, self._show_add))
         self._menu.append(add_item)
 
@@ -113,8 +105,6 @@ class RemindersApp:
 
         self._menu.show_all()
 
-    # ── data helpers ──────────────────────────────────────────────────────────
-
     def _upcoming(self, limit=None):
         now  = datetime.now()
         rows = [
@@ -123,8 +113,6 @@ class RemindersApp:
         ]
         rows.sort(key=lambda r: r["datetime"])
         return rows[:limit] if limit else rows
-
-    # ── reminder check loop ────────────────────────────────────────────────────
 
     def _check_reminders(self):
         now       = datetime.now()
@@ -140,8 +128,6 @@ class RemindersApp:
             if dt > now:
                 continue
 
-            # On first run: fire anything missed in the last MISSED_WINDOW_HOURS.
-            # On subsequent runs: only fire within the polling window.
             in_window = age < CHECK_INTERVAL_SECONDS + 5
             is_missed = self._first_run and age < MISSED_WINDOW_HOURS * 3600
 
@@ -166,9 +152,7 @@ class RemindersApp:
             save_reminders(reminders)
             self._rebuild_menu()
 
-        return True  # keep GLib timer alive
-
-    # ── fire a reminder ────────────────────────────────────────────────────────
+        return True
 
     def _fire(self, reminder):
         play_sound()
@@ -201,8 +185,6 @@ class RemindersApp:
             self.indicator.set_status(AppIndicator3.IndicatorStatus.ATTENTION)
         else:
             self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
-
-    # ── dialogs (signal-based — no dlg.run(), avoids X11 grab conflict) ───────
 
     def _show_add(self):
         try:
@@ -247,8 +229,6 @@ class RemindersApp:
         dlg.destroy()
         self._manage_dlg = None
         self._rebuild_menu()
-
-    # ── quit ──────────────────────────────────────────────────────────────────
 
     def _quit(self):
         Notify.uninit()

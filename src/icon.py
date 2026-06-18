@@ -52,15 +52,11 @@ def create_attention_icon():
     ctx.paint()
     ctx.set_operator(cairo.OPERATOR_OVER)
 
-    # Slightly offset clock to leave room for badge
     _base_clock(ctx, 10, 13, 6.5)
 
-    # Red circle badge top-right
     ctx.set_source_rgba(0.95, 0.2, 0.2, 1.0)
     ctx.arc(18, 4, 3.5, 0, 2 * math.pi)
     ctx.fill()
-
-    # Exclamation mark inside badge
     ctx.set_source_rgba(1, 1, 1, 1)
     ctx.set_line_width(1.3)
     ctx.set_line_cap(cairo.LINE_CAP_ROUND)

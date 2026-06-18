@@ -8,8 +8,6 @@ from storage import save_reminders
 from config  import SNOOZE_OPTIONS, APP_NAME
 
 
-# ── Add / Edit Dialog ──────────────────────────────────────────────────────────
-
 class AddDialog(Gtk.Dialog):
     """Add a new reminder or edit an existing one (pass reminder= to pre-fill)."""
 
@@ -78,7 +76,6 @@ class AddDialog(Gtk.Dialog):
         self._repeat.set_active(0)
         grid.attach(self._repeat, 1, 4, 1, 1)
 
-        # Pre-fill if editing
         if reminder:
             self._title.set_text(reminder.get("title", ""))
             self._msg.set_text(reminder.get("message", ""))
@@ -107,9 +104,6 @@ class AddDialog(Gtk.Dialog):
             "enabled":  True,
         }
 
-
-# ── Manage Reminders Dialog ────────────────────────────────────────────────────
-
 class ManageDialog(Gtk.Dialog):
     def __init__(self, reminders):
         super().__init__(title="Manage Reminders")
@@ -128,7 +122,6 @@ class ManageDialog(Gtk.Dialog):
         scroll.set_vexpand(True)
         scroll.set_shadow_type(Gtk.ShadowType.IN)
 
-        # columns: id, title, datetime_str, repeat, enabled
         self._store = Gtk.ListStore(str, str, str, str, bool)
         self._fill_store()
 
@@ -226,8 +219,6 @@ class ManageDialog(Gtk.Dialog):
         self._fill_store()
 
 
-# ── Reminder Fired Popup ───────────────────────────────────────────────────────
-
 class ReminderPopup(Gtk.Window):
     """Non-blocking popup shown when a reminder fires, with snooze options."""
 
@@ -301,7 +292,7 @@ class ReminderPopup(Gtk.Window):
         GLib.source_remove(self._timer)
         self._on_close()
         self.destroy()
-        return False  # let window-manager close proceed
+        return False  
 
     def _auto_close(self):
         self._on_close()
