@@ -17,7 +17,8 @@ from config  import (APP_NAME, CHECK_INTERVAL_SECONDS, MISSED_WINDOW_HOURS,
 from storage import load_reminders, save_reminders
 from icon    import create_tray_icon, create_attention_icon
 from sound   import play_sound
-from dialogs import AddDialog, ManageDialog, ReminderPopup
+from dialogs import AddDialog, ReminderPopup
+from window  import MainWindow
 
 
 class RemindersApp:
@@ -43,17 +44,20 @@ class RemindersApp:
         self.indicator.set_attention_icon_full("remainders-attention", "Reminder due")
         self.indicator.set_title(APP_NAME)
 
-        self._menu        = Gtk.Menu()
-        self._add_dlg     = None   # guard against duplicate dialogs
-        self._manage_dlg  = None
+        self._menu          = Gtk.Menu()
+        self._add_dlg       = None
+        self._manage_dlg    = None
         self._active_popups = 0
-        self._first_run   = True
+        self._first_run     = True
 
         self._rebuild_menu()
         self.indicator.set_menu(self._menu)
 
+        self._window = MainWindow(self)
+
         GLib.idle_add(self._check_reminders)
         GLib.timeout_add_seconds(CHECK_INTERVAL_SECONDS, self._check_reminders)
+
 
     def _acquire_lock(self):
         try:
@@ -72,6 +76,12 @@ class RemindersApp:
         header = Gtk.MenuItem(label=APP_NAME)
         header.set_sensitive(False)
         self._menu.append(header)
+        self._menu.append(Gtk.SeparatorMenuItem())
+
+        open_item = Gtk.MenuItem(label="Open Remainders")
+        open_item.connect("activate", lambda _: GLib.timeout_add(150, self._show_window))
+        self._menu.append(open_item)
+
         self._menu.append(Gtk.SeparatorMenuItem())
 
         upcoming = self._upcoming(limit=5)
@@ -93,10 +103,6 @@ class RemindersApp:
         add_item.connect("activate", lambda _: GLib.timeout_add(150, self._show_add))
         self._menu.append(add_item)
 
-        manage_item = Gtk.MenuItem(label="Manage Reminders…")
-        manage_item.connect("activate", lambda _: GLib.timeout_add(150, self._show_manage))
-        self._menu.append(manage_item)
-
         self._menu.append(Gtk.SeparatorMenuItem())
 
         quit_item = Gtk.MenuItem(label="Quit")
@@ -104,6 +110,11 @@ class RemindersApp:
         self._menu.append(quit_item)
 
         self._menu.show_all()
+
+    def _refresh_all(self):
+        """Rebuild tray menu + refresh the main window list."""
+        self._rebuild_menu()
+        self._window.refresh()
 
     def _upcoming(self, limit=None):
         now  = datetime.now()
@@ -113,6 +124,48 @@ class RemindersApp:
         ]
         rows.sort(key=lambda r: r["datetime"])
         return rows[:limit] if limit else rows
+
+
+    def open_add_dialog(self):
+        """Called by the window's + button."""
+        GLib.timeout_add(150, self._show_add)
+
+    def open_edit_dialog(self, reminder_id):
+        """Called when the user double-clicks a row in the window."""
+        reminders = load_reminders()
+        reminder  = next((r for r in reminders if r["id"] == reminder_id), None)
+        if not reminder:
+            return
+        dlg = AddDialog(reminder)
+        dlg.connect("response", self._on_edit_response, reminder_id)
+        dlg.show()
+
+    def _on_edit_response(self, dlg, response, original_id):
+        if response == Gtk.ResponseType.OK:
+            updated = dlg.build_reminder()
+            if updated["title"]:
+                updated["id"] = original_id
+                reminders = load_reminders()
+                reminders = [updated if r["id"] == original_id else r for r in reminders]
+                save_reminders(reminders)
+                self._refresh_all()
+        dlg.destroy()
+
+    def toggle_reminder(self, reminder_id, enabled):
+        """Called by the enable switch in the window."""
+        reminders = load_reminders()
+        for r in reminders:
+            if r["id"] == reminder_id:
+                r["enabled"] = enabled
+                break
+        save_reminders(reminders)
+        self._rebuild_menu()
+
+    def delete_reminder(self, reminder_id):
+        """Called by the delete button in the window."""
+        reminders = [r for r in load_reminders() if r["id"] != reminder_id]
+        save_reminders(reminders)
+        self._refresh_all()
 
     def _check_reminders(self):
         now       = datetime.now()
@@ -150,7 +203,7 @@ class RemindersApp:
 
         if changed:
             save_reminders(reminders)
-            self._rebuild_menu()
+            self._refresh_all()
 
         return True
 
@@ -159,12 +212,11 @@ class RemindersApp:
         self._active_popups += 1
         self._update_icon_state()
 
-        popup = ReminderPopup(
+        ReminderPopup(
             reminder,
             on_snooze=lambda minutes: self._snooze(reminder["id"], minutes),
             on_close=self._on_popup_closed,
         )
-        popup.show()
 
     def _snooze(self, reminder_id, minutes):
         reminders = load_reminders()
@@ -174,7 +226,7 @@ class RemindersApp:
                 r["enabled"]  = True
                 break
         save_reminders(reminders)
-        self._rebuild_menu()
+        self._refresh_all()
 
     def _on_popup_closed(self):
         self._active_popups = max(0, self._active_popups - 1)
@@ -185,6 +237,12 @@ class RemindersApp:
             self.indicator.set_status(AppIndicator3.IndicatorStatus.ATTENTION)
         else:
             self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
+
+    def _show_window(self):
+        Gdk.pointer_ungrab(Gdk.CURRENT_TIME)
+        Gdk.keyboard_ungrab(Gdk.CURRENT_TIME)
+        self._window.show_and_focus()
+        return False
 
     def _show_add(self):
         try:
@@ -207,28 +265,9 @@ class RemindersApp:
                 reminders = load_reminders()
                 reminders.append(reminder)
                 save_reminders(reminders)
-                self._rebuild_menu()
+                self._refresh_all()
         dlg.destroy()
         self._add_dlg = None
-
-    def _show_manage(self):
-        try:
-            Gdk.pointer_ungrab(Gdk.CURRENT_TIME)
-            Gdk.keyboard_ungrab(Gdk.CURRENT_TIME)
-            if self._manage_dlg:
-                self._manage_dlg.present()
-                return False
-            self._manage_dlg = ManageDialog(load_reminders())
-            self._manage_dlg.connect("response", self._on_manage_response)
-            self._manage_dlg.show()
-        except Exception:
-            traceback.print_exc()
-        return False
-
-    def _on_manage_response(self, dlg, _response):
-        dlg.destroy()
-        self._manage_dlg = None
-        self._rebuild_menu()
 
     def _quit(self):
         Notify.uninit()
