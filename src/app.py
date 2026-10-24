@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from config  import (APP_NAME, CHECK_INTERVAL_SECONDS, MISSED_WINDOW_HOURS,
                      DATA_DIR, ICON_DIR, LOCK_FILE)
 from storage import load_reminders, save_reminders
+from scheduler import parse_datetime, process_reminders
 from icon    import create_tray_icon, create_attention_icon
 from sound   import play_sound
 from dialogs import AddDialog, ReminderPopup
@@ -46,9 +47,7 @@ class RemindersApp:
 
         self._menu          = Gtk.Menu()
         self._add_dlg       = None
-        self._manage_dlg    = None
         self._active_popups = 0
-        self._first_run     = True
 
         self._rebuild_menu()
         self.indicator.set_menu(self._menu)
@@ -87,7 +86,7 @@ class RemindersApp:
         upcoming = self._upcoming(limit=5)
         if upcoming:
             for r in upcoming:
-                dt  = datetime.fromisoformat(r["datetime"])
+                dt  = parse_datetime(r["datetime"])
                 lbl = f"  {r['title']}  ·  {dt.strftime('%b %d, %H:%M')}"
                 item = Gtk.MenuItem(label=lbl)
                 item.set_sensitive(False)
@@ -118,10 +117,13 @@ class RemindersApp:
 
     def _upcoming(self, limit=None):
         now  = datetime.now()
-        rows = [
-            r for r in load_reminders()
-            if r.get("enabled", True) and datetime.fromisoformat(r["datetime"]) > now
-        ]
+        rows = []
+        for reminder in load_reminders():
+            if not reminder.get("enabled", True):
+                continue
+            when = parse_datetime(reminder.get("datetime"))
+            if when is not None and when > now:
+                rows.append(reminder)
         rows.sort(key=lambda r: r["datetime"])
         return rows[:limit] if limit else rows
 
@@ -134,21 +136,22 @@ class RemindersApp:
         """Called when the user double-clicks a row in the window."""
         reminders = load_reminders()
         reminder  = next((r for r in reminders if r["id"] == reminder_id), None)
-        if not reminder:
+        if not reminder or parse_datetime(reminder.get("datetime")) is None:
             return
         dlg = AddDialog(reminder)
         dlg.connect("response", self._on_edit_response, reminder_id)
         dlg.show()
 
     def _on_edit_response(self, dlg, response, original_id):
+        if not dlg.should_close(response):
+            return
         if response == Gtk.ResponseType.OK:
             updated = dlg.build_reminder()
-            if updated["title"]:
-                updated["id"] = original_id
-                reminders = load_reminders()
-                reminders = [updated if r["id"] == original_id else r for r in reminders]
-                save_reminders(reminders)
-                self._refresh_all()
+            updated["id"] = original_id
+            reminders = load_reminders()
+            reminders = [updated if r["id"] == original_id else r for r in reminders]
+            save_reminders(reminders)
+            self._refresh_all()
         dlg.destroy()
 
     def toggle_reminder(self, reminder_id, enabled):
@@ -168,43 +171,22 @@ class RemindersApp:
         self._refresh_all()
 
     def _check_reminders(self):
-        now       = datetime.now()
-        reminders = load_reminders()
-        changed   = False
-
-        for r in reminders:
-            if not r.get("enabled", True):
-                continue
-            dt  = datetime.fromisoformat(r["datetime"])
-            age = (now - dt).total_seconds()
-
-            if dt > now:
-                continue
-
-            in_window = age < CHECK_INTERVAL_SECONDS + 5
-            is_missed = self._first_run and age < MISSED_WINDOW_HOURS * 3600
-
-            if in_window or is_missed:
-                self._fire(r)
-                repeat = r.get("repeat", "none")
-                if repeat == "none":
-                    r["enabled"] = False
-                elif repeat == "daily":
-                    r["datetime"] = (dt + timedelta(days=1)).isoformat()
-                elif repeat == "weekly":
-                    r["datetime"] = (dt + timedelta(weeks=1)).isoformat()
-                elif repeat == "monthly":
-                    month = dt.month % 12 + 1
-                    year  = dt.year + (1 if dt.month == 12 else 0)
-                    r["datetime"] = dt.replace(year=year, month=month).isoformat()
-                changed = True
-
-        self._first_run = False
-
-        if changed:
-            save_reminders(reminders)
-            self._refresh_all()
-
+        try:
+            now = datetime.now()
+            reminders = load_reminders()
+            fired, changed = process_reminders(
+                reminders,
+                now,
+                check_interval=CHECK_INTERVAL_SECONDS,
+                missed_hours=MISSED_WINDOW_HOURS,
+            )
+            if changed:
+                save_reminders(reminders)
+                self._refresh_all()
+            for reminder in fired:
+                self._fire(reminder)
+        except Exception:
+            traceback.print_exc()
         return True
 
     def _fire(self, reminder):
@@ -259,13 +241,13 @@ class RemindersApp:
         return False
 
     def _on_add_response(self, dlg, response):
+        if not dlg.should_close(response):
+            return
         if response == Gtk.ResponseType.OK:
-            reminder = dlg.build_reminder()
-            if reminder["title"]:
-                reminders = load_reminders()
-                reminders.append(reminder)
-                save_reminders(reminders)
-                self._refresh_all()
+            reminders = load_reminders()
+            reminders.append(dlg.build_reminder())
+            save_reminders(reminders)
+            self._refresh_all()
         dlg.destroy()
         self._add_dlg = None
 

@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 *.pyo
+.pytest_cache/
+.venv/
 
 # Runtime data (generated at startup)
 *.lock
