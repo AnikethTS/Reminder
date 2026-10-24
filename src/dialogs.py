@@ -2,10 +2,10 @@ import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GLib
 
-import uuid
 from datetime import datetime
 from storage import save_reminders
 from config  import SNOOZE_OPTIONS, APP_NAME
+from scheduler import REPEAT_CHOICES, make_reminder
 
 
 class AddDialog(Gtk.Dialog):
@@ -23,6 +23,9 @@ class AddDialog(Gtk.Dialog):
         self.set_position(Gtk.WindowPosition.CENTER)
 
         self._original_id = reminder["id"] if reminder else None
+        self._enabled = True if reminder is None else reminder.get("enabled", True)
+        self._error = Gtk.Label(xalign=0)
+        self._error.set_no_show_all(True)
 
         box  = self.get_content_area()
         grid = Gtk.Grid(row_spacing=8, column_spacing=10)
@@ -71,10 +74,14 @@ class AddDialog(Gtk.Dialog):
 
         lbl("Repeat", 4)
         self._repeat = Gtk.ComboBoxText()
-        for opt in ("None", "Daily", "Weekly", "Monthly"):
-            self._repeat.append_text(opt)
+        self._repeat.set_tooltip_text("Weekdays skip Saturday and Sunday")
+        for _key, label in REPEAT_CHOICES:
+            self._repeat.append_text(label)
         self._repeat.set_active(0)
         grid.attach(self._repeat, 1, 4, 1, 1)
+
+        self._error.get_style_context().add_class("error")
+        grid.attach(self._error, 1, 5, 2, 1)
 
         if reminder:
             self._title.set_text(reminder.get("title", ""))
@@ -84,25 +91,44 @@ class AddDialog(Gtk.Dialog):
             self._cal.select_day(dt.day)
             self._hour.set_value(dt.hour)
             self._minute.set_value(dt.minute)
-            rev = {"none": 0, "daily": 1, "weekly": 2, "monthly": 3}
-            self._repeat.set_active(rev.get(reminder.get("repeat", "none"), 0))
+            keys = [key for key, _label in REPEAT_CHOICES]
+            try:
+                self._repeat.set_active(keys.index(reminder.get("repeat", "none")))
+            except ValueError:
+                self._repeat.set_active(0)
 
         self.show_all()
         self._title.grab_focus()
 
+    def should_close(self, response):
+        if response != Gtk.ResponseType.OK:
+            return True
+        if self._title.get_text().strip():
+            self._error.hide()
+            return True
+        self._error.set_markup(
+            "<span color='#c01c28'>Give the reminder a title.</span>"
+        )
+        self._error.show()
+        self._title.grab_focus()
+        return False
+
     def build_reminder(self):
         year, month, day = self._cal.get_date()
-        dt = datetime(year, month + 1, day,
-                      int(self._hour.get_value()), int(self._minute.get_value()))
-        repeat_map = {0: "none", 1: "daily", 2: "weekly", 3: "monthly"}
-        return {
-            "id":       self._original_id or str(uuid.uuid4()),
-            "title":    self._title.get_text().strip(),
-            "message":  self._msg.get_text().strip(),
-            "datetime": dt.isoformat(),
-            "repeat":   repeat_map[self._repeat.get_active()],
-            "enabled":  True,
-        }
+        when = datetime(
+            year, month + 1, day,
+            int(self._hour.get_value()), int(self._minute.get_value()),
+        )
+        index = self._repeat.get_active()
+        repeat = REPEAT_CHOICES[index][0] if 0 <= index < len(REPEAT_CHOICES) else "none"
+        return make_reminder(
+            title=self._title.get_text(),
+            message=self._msg.get_text(),
+            when=when,
+            repeat=repeat,
+            reminder_id=self._original_id,
+            enabled=self._enabled,
+        )
 
 class ManageDialog(Gtk.Dialog):
     def __init__(self, reminders):
@@ -187,16 +213,17 @@ class ManageDialog(Gtk.Dialog):
         self._edit_dlg.show()
 
     def _on_edit_response(self, dlg, response, original_id):
+        if not dlg.should_close(response):
+            return
         if response == Gtk.ResponseType.OK:
             updated = dlg.build_reminder()
-            if updated["title"]:
-                updated["id"] = original_id
-                self._reminders = [
-                    updated if r["id"] == original_id else r
-                    for r in self._reminders
-                ]
-                save_reminders(self._reminders)
-                self._fill_store()
+            updated["id"] = original_id
+            self._reminders = [
+                updated if r["id"] == original_id else r
+                for r in self._reminders
+            ]
+            save_reminders(self._reminders)
+            self._fill_store()
         dlg.destroy()
         self._edit_dlg = None
 

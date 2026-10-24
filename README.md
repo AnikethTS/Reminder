@@ -11,11 +11,14 @@ Remainders lives in the top bar as a clock icon and also provides a full GUI win
 - **System tray icon** — clock icon in the top bar with a quick-add menu
 - **Main GUI window** — full reminder list with enable switches and delete buttons
 - **Add / Edit / Delete** reminders with title, message, date, time, and repeat
-- **Repeat modes** — None, Daily, Weekly, Monthly
+- **Repeat modes** — None, Daily, Weekdays, Weekly, Monthly, Yearly
 - **Alarm sound** — plays `alarm-clock-elapsed.oga` on reminder fire
 - **Snooze popup** — 5 min / 10 min / 30 min / 1 hour snooze options
-- **Overdue badge** — red dot on the tray icon when a reminder is active
-- **Missed reminders** — fires reminders missed while the app was off (up to 24 h)
+- **Search** — filter the list by title or message
+- **Due labels** — “In 12 mins”, “Today”, “Tomorrow”, plus soon and overdue badges
+- **Overdue badge** — red dot on the tray icon while a reminder popup is open
+- **Missed reminders** — fires reminders missed while the app was off or asleep (up to 24 h), and catches repeating reminders up to the next future time
+- **Safe storage** — reminders are written atomically; a broken file is backed up instead of crashing the app
 - **Single-instance guard** — prevents duplicate tray icons
 - **Auto-starts on login** via GNOME autostart
 
@@ -66,6 +69,8 @@ bash install.sh
 | Edit a reminder | Click any row in the list |
 | Delete a reminder | Click the trash icon on the row |
 | Enable / disable | Toggle the switch on the row |
+| Search | Type in the box at the top of the window, or press Ctrl+F |
+| Add from the keyboard | Ctrl+N |
 | Snooze | When a popup fires, choose 5 / 10 / 30 min or 1 hour |
 | Close window | Click ✕ — the app keeps running in the tray |
 | Quit completely | Tray → **Quit** |
@@ -80,10 +85,12 @@ Remainders/
 ├── install.sh          # One-step installer
 ├── assets/
 │   └── remainders.svg  # Scalable app icon
+├── tests/              # Scheduler and storage tests
 └── src/
     ├── app.py          # RemindersApp — tray indicator, menu, check loop
     ├── window.py       # MainWindow — GTK GUI window
     ├── dialogs.py      # AddDialog, ReminderPopup
+    ├── scheduler.py    # Repeat rules and due checks (no GTK)
     ├── storage.py      # load / save JSON
     ├── icon.py         # Cairo tray icon renderer
     ├── sound.py        # paplay alarm sound
@@ -91,6 +98,19 @@ Remainders/
 ```
 
 Reminders are stored as JSON at `~/.local/share/remainders/reminders.json`.
+
+---
+
+## Tests
+
+Scheduling and storage are plain Python, so they run without a display:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+python3 -m pytest
+```
+
+GitHub Actions runs the same suite on Python 3.10, 3.12, and 3.13.
 
 ---
 

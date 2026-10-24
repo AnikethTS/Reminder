@@ -3,6 +3,8 @@ gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GLib, Gdk
 
 from datetime import datetime
+
+from scheduler import describe_when, due_state, parse_datetime, repeat_label
 from storage import load_reminders
 
 
@@ -27,6 +29,13 @@ window {
 .overdue-badge {
     background-color: #e01b24;
     color: white;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 0.75em;
+}
+.soon-badge {
+    background-color: #e5a50a;
+    color: #1c1c1c;
     border-radius: 4px;
     padding: 1px 6px;
     font-size: 0.75em;
@@ -57,18 +66,28 @@ class MainWindow(Gtk.Window):
         self.set_resizable(True)
         self.connect("delete-event", self._on_close)
 
-        header = Gtk.HeaderBar()
-        header.set_show_close_button(True)
-        header.set_title("Remainders")
-        self.set_titlebar(header)
+        self._header = Gtk.HeaderBar()
+        self._header.set_show_close_button(True)
+        self._header.set_title("Remainders")
+        self.set_titlebar(self._header)
 
         add_btn = Gtk.Button()
         add_btn.set_image(
             Gtk.Image.new_from_icon_name("list-add-symbolic", Gtk.IconSize.BUTTON)
         )
-        add_btn.set_tooltip_text("Add reminder")
+        add_btn.set_tooltip_text("Add reminder (Ctrl+N)")
         add_btn.connect("clicked", lambda _: self._app.open_add_dialog())
-        header.pack_end(add_btn)
+        self._header.pack_end(add_btn)
+
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._search = Gtk.SearchEntry()
+        self._search.set_placeholder_text("Search reminders")
+        self._search.set_margin_start(10)
+        self._search.set_margin_end(10)
+        self._search.set_margin_top(10)
+        self._search.set_margin_bottom(4)
+        self._search.connect("search-changed", lambda entry: self.refresh())
+        content.pack_start(self._search, False, False, 0)
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
@@ -79,7 +98,9 @@ class MainWindow(Gtk.Window):
         self._listbox.connect("row-activated", self._on_row_activated)
 
         scroll.add(self._listbox)
-        self.add(scroll)
+        content.pack_start(scroll, True, True, 0)
+        self.add(content)
+        self.connect("key-press-event", self._on_key)
 
         self.refresh()
 
@@ -93,21 +114,43 @@ class MainWindow(Gtk.Window):
 
         reminders = load_reminders()
         now = datetime.now()
+        query = self._search.get_text().strip().casefold()
+        visible = [r for r in reminders if self._matches(r, query)]
+        visible.sort(key=self._sort_key)
+
+        overdue = sum(1 for r in reminders if due_state(r, now) == "overdue")
+        subtitle = f"{len(reminders)} reminder" if len(reminders) == 1 else f"{len(reminders)} reminders"
+        if overdue:
+            subtitle += f" · {overdue} overdue"
+        self._header.set_subtitle(subtitle)
 
         if not reminders:
-            self._listbox.add(self._empty_state_row())
+            self._listbox.add(self._empty_state_row(
+                "No reminders yet",
+                "Click + to add your first reminder",
+            ))
+        elif not visible:
+            self._listbox.add(self._empty_state_row(
+                "No matching reminders",
+                "Try a different search",
+            ))
         else:
-            for r in sorted(reminders, key=lambda x: x["datetime"]):
-                is_overdue = (
-                    r.get("enabled", True)
-                    and datetime.fromisoformat(r["datetime"]) < now
-                    and r.get("repeat", "none") == "none"
-                )
-                self._listbox.add(self._make_row(r, is_overdue))
+            for reminder in visible:
+                self._listbox.add(self._make_row(reminder, now))
 
         self._listbox.show_all()
 
-    def _empty_state_row(self):
+    def _matches(self, reminder, query):
+        if not query:
+            return True
+        haystack = f"{reminder.get('title', '')}\n{reminder.get('message', '')}".casefold()
+        return query in haystack
+
+    def _sort_key(self, reminder):
+        when = parse_datetime(reminder.get("datetime"))
+        return (when is None, when or datetime.max)
+
+    def _empty_state_row(self, title, subtitle):
         row = Gtk.ListBoxRow()
         row.set_selectable(False)
         row.set_activatable(False)
@@ -123,18 +166,20 @@ class MainWindow(Gtk.Window):
         icon.set_pixel_size(64)
         box.pack_start(icon, False, False, 0)
 
-        title = Gtk.Label()
-        title.set_markup("<span weight='bold' size='large'>No reminders yet</span>")
-        box.pack_start(title, False, False, 0)
+        title_lbl = Gtk.Label()
+        title_lbl.set_markup(
+            f"<span weight='bold' size='large'>{GLib.markup_escape_text(title)}</span>"
+        )
+        box.pack_start(title_lbl, False, False, 0)
 
-        sub = Gtk.Label(label="Click + to add your first reminder")
+        sub = Gtk.Label(label=subtitle)
         sub.get_style_context().add_class("dim-label")
         box.pack_start(sub, False, False, 0)
 
         row.add(box)
         return row
 
-    def _make_row(self, reminder, is_overdue=False):
+    def _make_row(self, reminder, now):
         row = Gtk.ListBoxRow()
         row._reminder_id = reminder["id"]
         row.get_style_context().add_class("reminder-row")
@@ -152,23 +197,27 @@ class MainWindow(Gtk.Window):
         title_box = Gtk.Box(spacing=8)
         title_lbl = Gtk.Label(xalign=0)
         title_lbl.set_markup(
-            f"<span weight='bold'>{GLib.markup_escape_text(reminder['title'])}</span>"
+            f"<span weight='bold'>{GLib.markup_escape_text(reminder.get('title') or '')}</span>"
         )
         title_lbl.set_ellipsize(3)
         title_box.pack_start(title_lbl, False, False, 0)
 
-        if is_overdue:
-            badge = Gtk.Label(label="overdue")
-            badge.get_style_context().add_class("overdue-badge")
-            title_box.pack_start(badge, False, False, 0)
+        state = due_state(reminder, now)
+        if state == "overdue":
+            self._badge(title_box, "overdue", "overdue-badge")
+        elif state == "soon":
+            self._badge(title_box, "soon", "soon-badge")
 
         text.pack_start(title_box, False, False, 0)
 
-        dt     = datetime.fromisoformat(reminder["datetime"])
-        repeat = reminder.get("repeat", "none")
-        detail = dt.strftime("%b %d, %Y  %H:%M")
-        if repeat != "none":
-            detail += f"  ·  {repeat.capitalize()}"
+        when = parse_datetime(reminder.get("datetime"))
+        if when is None:
+            detail = "Invalid date"
+        else:
+            detail = f"{describe_when(when, now)}  ·  {when.strftime('%b %d, %Y  %H:%M')}"
+            repeat = reminder.get("repeat", "none")
+            if repeat != "none":
+                detail += f"  ·  {repeat_label(repeat)}"
         if reminder.get("message"):
             detail = reminder["message"] + "\n" + detail
 
@@ -197,12 +246,47 @@ class MainWindow(Gtk.Window):
         del_btn.set_tooltip_text("Delete")
         del_btn.connect(
             "clicked",
-            lambda _b, rid=reminder["id"]: self._app.delete_reminder(rid),
+            lambda _b, rid=reminder["id"], title=reminder.get("title", ""): self._confirm_delete(rid, title),
         )
         outer.pack_start(del_btn, False, False, 0)
 
         row.add(outer)
         return row
+
+    def _badge(self, box, label, css_class):
+        badge = Gtk.Label(label=label)
+        badge.get_style_context().add_class(css_class)
+        box.pack_start(badge, False, False, 0)
+
+    def _confirm_delete(self, reminder_id, title):
+        name = title.strip() or "This reminder"
+        dialog = Gtk.MessageDialog(
+            parent=self,
+            flags=Gtk.DialogFlags.MODAL | Gtk.DialogFlags.DESTROY_WITH_PARENT,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.NONE,
+            message_format="Delete this reminder?",
+        )
+        dialog.format_secondary_text(f"“{name}” will be removed.")
+        dialog.add_button("_Cancel", Gtk.ResponseType.CANCEL)
+        delete_btn = dialog.add_button("_Delete", Gtk.ResponseType.OK)
+        delete_btn.get_style_context().add_class("destructive-action")
+        dialog.set_default_response(Gtk.ResponseType.CANCEL)
+        response = dialog.run()
+        dialog.destroy()
+        if response == Gtk.ResponseType.OK:
+            self._app.delete_reminder(reminder_id)
+
+    def _on_key(self, _window, event):
+        if not (event.state & Gdk.ModifierType.CONTROL_MASK):
+            return False
+        if event.keyval in (Gdk.KEY_n, Gdk.KEY_N):
+            self._app.open_add_dialog()
+            return True
+        if event.keyval in (Gdk.KEY_f, Gdk.KEY_F):
+            self._search.grab_focus()
+            return True
+        return False
 
     def _on_row_activated(self, _listbox, row):
         if hasattr(row, "_reminder_id"):
